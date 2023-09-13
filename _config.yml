@@ -20,10 +20,10 @@ timezone: Asia/Shanghai
 
 title: xqdd's blog # the main title
 
-tagline: # it will display as the sub-title
+tagline: 水滴石穿，积土成山 # it will display as the sub-title
 
 description: >- # used by seo meta and the atom feed
-  A minimal, responsive and feature-rich Jekyll theme for technical writing.
+  技术笔记、读书笔记、折腾记录
 
 # fill in the protocol & hostname for your site, e.g., 'https://username.github.io'
 url: ""
