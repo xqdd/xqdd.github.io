@@ -1,7 +1,7 @@
 ---
 title: 图解MySQL读书笔记
 date: 2023-09-13
-categories: [读书笔记,后台,MYSQL]
+categories: [读书笔记,MySQL]
 tags: [读书笔记,mysql]
 ---
 
