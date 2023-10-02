@@ -21,9 +21,9 @@ mysql是CS架构
 
 ![sql执行过程](https://storage.xqdd.cc/notes/images/%E7%AC%94%E8%AE%B0/JAVA/%E5%9B%BE%E8%A7%A3mysql/1692802104346.png)  
 
-> 索引下推（index condition pushdown）：5.6的功能，存在联合索引的时候，比如idx_a_b_c，查询条件是a=1 and c=2，虽然c不走索引，但仍然可以在二级索引中筛选掉c的记录，减少回表次数，可以看到是将判断从server端下推到二级索引(using index condition)
-> 之前的流程是：server->二级索引->主键索引->server端判断是否满足条件c进行过滤
-> 现在的流程是：server->二级索引(同时判断是否满足条件c)->主键索引->server
+> 索引下推（index condition pushdown）：5.6的功能，存在联合索引的时候，比如idx_a_b_c，查询条件是a=1 and c=2，虽然c不走索引，但仍然可以在二级索引中筛选掉c的记录，减少回表次数，可以看到是将判断从server端下推到二级索引(using index condition)  
+> 之前的流程是：server->二级索引->主键索引->server端判断是否满足条件c进行过滤  
+> 现在的流程是：server->二级索引(同时判断是否满足条件c)->主键索引->server  
 
 ## 一行记录是怎么存储的
 
@@ -135,7 +135,7 @@ mysql是CS架构
 
 ## 为什么MySQL单表不要超过2000W行？
 
-- 假设指针大小为6字节，主键为bitinit 8字节，16K字节-1字节
+- 假设指针大小为6字节，主键为bitinit 8字节，16K字节-1K字节的文件头尾页头等信息
 - 那么每个非叶子节点可以存储15k/(6+8)=1097条数据
 - 假设每行数据大小为1KB，那么叶子节点可以存储15条数据，假设3层则：`1097*1097*15=1k800w`
 - 查询树高：
@@ -242,9 +242,64 @@ a.table_id = b.table_id AND a.space <> 0;
 
 ## 日志
 
-## 内存
+- undo log（回滚日志）：是Innodb存储引擎生成的日志，实现了事务中的原子性，主要用于`事务回滚和MVVC`
+- redo log（重做日志）：是Innodb存储引擎生成的日志，实现了事务中的持久性，主要用于`掉电等故障恢复`
+- binlog（归档日志）：是Server层生成的日志，主要用于`数据备份和主从复制`
 
-## 加餐
+### undo log
+
+- 进行数据操作的时候会将操作的内容(新值、旧值)都记录下来，在回滚的时候用于恢复到原始的状态，保证了事务的原子性
+- 更新生成的undo log会形成版本链，通过版本链，可以在不同事务隔离级别下形成不同的ReadView，实现可重复读和读已提交的功能
+
+### Buffer Pool
+
+缓存索引页、数据页、Undo页、插入缓存、自适应哈希索引、锁信息等等，以16KB一页为单位
+
+### redo log
+
+需要它的原因是前面为提高效率引入了存在内存的buffer pool，掉电或宕机的时候如果未落盘会导致数据丢失，所以mysql折中考虑使用了效率相对好一些的顺序连续io，即WAL（Write-Ahead Logging）日志技术
+![redo log流程](https://storage.xqdd.cc/notes/images/%E7%AC%94%E8%AE%B0/JAVA/%E5%9B%BE%E8%A7%A3mysql%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/1696214630042.png)
+- undo log和redo log的区别是一个记录事务操作前的数据，一个记录事务操作完成之后的数据
+- 最终实现了事务的持久性，让mysql有了crash-safe的能力，将写操作从随机写变成顺序写，提高mysql的写入性能
+- redo log也不是直接写入磁盘的，后面还有一个redo log buffer
+![redo log buffer](https://storage.xqdd.cc/notes/images/%E7%AC%94%E8%AE%B0/JAVA/%E5%9B%BE%E8%A7%A3mysql%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/1696215141381.png)  
+- redo log刷盘时机
+  - mysql正常关闭时
+  - redo log buffer写入量大于redo log buffer内存空间一半时
+  - 每次事务提交时(可以通过innodb_flush_log_at_trx_commit控制，0为只写到用户内存，默认值1写到磁盘，2为只写到内核内存)
+- 当innodb_flush_log_at_trx_commit取值为0或2的时候，InnoDB后台线程每隔1s会进行主动刷盘操作，所以针对0，mysql宕机可能操作丢失1s数据，针对2，mysql宕机不会丢失数据，操作系统宕机才会丢失数据
+![innodb_flush_log_at_trx_commit参数行为](https://storage.xqdd.cc/notes/images/%E7%AC%94%E8%AE%B0/JAVA/%E5%9B%BE%E8%A7%A3mysql%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/1696215625268.png)
+![redo log循环写机制](https://storage.xqdd.cc/notes/images/%E7%AC%94%E8%AE%B0/JAVA/%E5%9B%BE%E8%A7%A3mysql%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/1696215826296.png)  
+![redo log写满后的处理流程](https://storage.xqdd.cc/notes/images/%E7%AC%94%E8%AE%B0/JAVA/%E5%9B%BE%E8%A7%A3mysql%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/1696215860774.png)  
+
+### binlog
+
+![redo log和binlog区别](https://storage.xqdd.cc/notes/images/%E7%AC%94%E8%AE%B0/JAVA/%E5%9B%BE%E8%A7%A3mysql%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/1696216090190.png)  
+![mysql主从同步流程](https://storage.xqdd.cc/notes/images/%E7%AC%94%E8%AE%B0/JAVA/%E5%9B%BE%E8%A7%A3mysql%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/1696216524010.png)  
+![mysql主从复制模型](https://storage.xqdd.cc/notes/images/%E7%AC%94%E8%AE%B0/JAVA/%E5%9B%BE%E8%A7%A3mysql%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/1696216475382.png)  
+- 事务执行的过程中，会先写日志到binlog cache，在事务提交的时候写到磁盘，如果binlog cache不够大，会先写到磁盘中
+![binlog写入磁盘流程](https://storage.xqdd.cc/notes/images/%E7%AC%94%E8%AE%B0/JAVA/%E5%9B%BE%E8%A7%A3mysql%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/1696217030306.png)  
+![bin log刷盘参数](https://storage.xqdd.cc/notes/images/%E7%AC%94%E8%AE%B0/JAVA/%E5%9B%BE%E8%A7%A3mysql%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/1696217013248.png)  
+
+### 两阶段提交
+
+// TODO
+
+### 总结
+
+![更新一行数据mysql执行的逻辑操作](https://storage.xqdd.cc/notes/images/%E7%AC%94%E8%AE%B0/JAVA/%E5%9B%BE%E8%A7%A3mysql%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/1696216714012.png)  
+![mysql磁盘IO高的处理方法，主要时控制redo log和binlog的刷盘时机](https://storage.xqdd.cc/notes/images/%E7%AC%94%E8%AE%B0/JAVA/%E5%9B%BE%E8%A7%A3mysql%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/1696217109446.png)
+
+## buffer pool
+
+> 默认大小128MB，可通过调整innodb_buffer_pool_size的大小来控制，一般建议设置成可用物理内存的60%~80%
+
+为便于管理，buffer pool页由以下组织关系进行管理控制
+- 空闲页链表(Free List)
+- 脏页链表(Flush List)
+- LRU List(管理脏页和干净页)：分为冷热数据(时间+访问次数)，防止短时间内批量访问造成的大量热数据被淘汰问题
+
+## 中途加餐
 
 ### redolog和undolog
 
